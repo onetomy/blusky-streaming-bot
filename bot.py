@@ -145,6 +145,10 @@ def get_movie_extras(movie_id):
 
 
 def fetch_candidate_movie(posted_ids, history):
+    today = datetime.utcnow().date()
+    # Fereastră de 10 zile pentru a prinde premierele recente ale săptămânii
+    start_date = today - timedelta(days=10)
+
     provider_ids_str = "|".join(str(pid) for pid in PROVIDER_IDS.keys())
 
     url = "https://api.themoviedb.org/3/discover/movie"
@@ -153,7 +157,9 @@ def fetch_candidate_movie(posted_ids, history):
         "watch_region": "RO",
         "with_watch_providers": provider_ids_str,
         "with_watch_monetization_types": "flatrate",
-        "sort_by": "popularity.desc",
+        "primary_release_date.gte": start_date.strftime("%Y-%m-%d"),
+        "primary_release_date.lte": today.strftime("%Y-%m-%d"),
+        "sort_by": "primary_release_date.desc",  # Pune cele mai noi pe primele locuri
         "language": "ro-RO",
     }
 
@@ -166,7 +172,7 @@ def fetch_candidate_movie(posted_ids, history):
         if m_id not in posted_ids:
             providers = get_streaming_providers(m_id)
             if providers:
-                # Dacă filmul este pe Apple TV, îl alege imediat pe primul loc
+                # Dacă este titlu pe Apple TV, îl prioritizează imediat
                 if any(p in APPLE_VARIANTS for p in providers):
                     return movie, providers
                 candidates.append((movie, providers))
@@ -174,7 +180,7 @@ def fetch_candidate_movie(posted_ids, history):
     if not candidates:
         return None, None
 
-    # Alternare între platforme pentru a nu posta același serviciu consecutiv
+    # Alternare între servicii: verifică platforma postată anterior
     last_provider = history[-1].get("provider") if history else None
 
     for movie, providers in candidates:
