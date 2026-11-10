@@ -12,7 +12,7 @@ on:
     - cron: '5 17 * * *'
     - cron: '5 18 * * *'
 
-  workflow_dispatch: # Permite în continuare rularea manuală la cerere
+  workflow_dispatch:
 
 jobs:
   run-bot:
@@ -22,10 +22,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.2.2
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v5.4.0
         with:
           python-version: '3.11'
           cache: 'pip'
