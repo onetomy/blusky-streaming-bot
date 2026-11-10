@@ -10,6 +10,20 @@ BSKY_APP_PASSWORD = os.environ.get("BSKY_APP_PASSWORD")
 
 STATE_FILE = "posted_movies.json"
 
+# ==============================================================================
+# LISTA PLATFORMELOR PERMISE
+# Botul va lua în considerare DOAR filmele disponibile pe aceste platforme:
+# ==============================================================================
+ALLOWED_PROVIDERS = {
+    "Netflix",
+    "Max",
+    "HBO Max",
+    "SkyShowtime",
+    "Amazon Prime Video",
+    "Disney Plus",
+    "Apple TV Plus",
+}
+
 
 def load_posted_ids():
     if os.path.exists(STATE_FILE):
@@ -27,16 +41,21 @@ def save_posted_ids(posted_ids):
 
 
 def get_streaming_providers(movie_id):
+    """Interoghează JustWatch prin TMDB și filtrează după platformele dorite."""
     url = f"https://api.themoviedb.org/3/movie/{movie_id}/watch/providers"
     params = {"api_key": TMDB_API_KEY}
     res = requests.get(url, params=params).json()
 
     ro_providers = res.get("results", {}).get("RO", {})
     flatrate = ro_providers.get("flatrate", [])
-    return [p["provider_name"] for p in flatrate]
+
+    # Păstrăm exclusiv platformele din lista ALLOWED_PROVIDERS
+    matched = [p["provider_name"] for p in flatrate if p.get("provider_name") in ALLOWED_PROVIDERS]
+    return matched
 
 
 def fetch_candidate_movie(posted_ids):
+    """Caută titluri recente din ultimele 60 de zile disponibile în România."""
     today = datetime.utcnow().date()
     start_date = today - timedelta(days=60)
 
@@ -64,7 +83,7 @@ def fetch_candidate_movie(posted_ids):
 
 
 def download_poster(poster_path):
-    """Descarcă imaginea de poster de pe TMDB în format binar."""
+    """Descarcă posterul oficial de pe serverele TMDB."""
     if not poster_path:
         return None
     url = f"https://image.tmdb.org/t/p/w500{poster_path}"
@@ -95,21 +114,18 @@ def post_to_bsky(movie, providers):
     client = Client()
     client.login(BSKY_HANDLE, BSKY_APP_PASSWORD)
 
-    # Verifică dacă filmul are poster și îl descarcă
     poster_bytes = download_poster(movie.get("poster_path"))
 
     if poster_bytes:
-        # Postează textul însoțit de poster și descriere alt-text
         client.send_image(
             text=tb,
             image=poster_bytes,
             image_alt=f"Poster oficial pentru filmul {title}",
         )
     else:
-        # Fallback dacă filmul nu are poster disponibil
         client.send_post(tb)
 
-    print(f"Postat cu succes cu poster: {title}")
+    print(f"Postat cu succes: {title} ({providers_str})")
 
 
 def main():
@@ -117,7 +133,7 @@ def main():
     movie, providers = fetch_candidate_movie(posted_ids)
 
     if not movie:
-        print("Nu au fost găsite noutăți nepostate.")
+        print("Nu au fost găsite noutăți pe platformele selectate.")
         return
 
     post_to_bsky(movie, providers)
