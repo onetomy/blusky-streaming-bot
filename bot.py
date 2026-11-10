@@ -256,3 +256,63 @@ def post_to_bsky(movie, providers):
     tb.text(f"\n{hashtags}")
 
     client = Client()
+    client.login(BSKY_HANDLE, BSKY_APP_PASSWORD)
+
+    if trailer_url:
+        client.send_post(
+            text=tb,
+            embed={
+                "$type": "app.bsky.embed.external",
+                "external": {
+                    "uri": trailer_url,
+                    "title": f"{title} - Trailer Oficial",
+                    "description": f"Trailer oficial pentru {title}",
+                },
+            },
+            langs=["ro"],
+        )
+        print(f"Postat cu trailer: {title} ({main_provider})")
+    else:
+        poster_bytes = download_poster(movie.get("poster_path"))
+        if poster_bytes:
+            upload_resp = client.upload_blob(poster_bytes)
+            client.send_post(
+                text=tb,
+                embed={
+                    "$type": "app.bsky.embed.images",
+                    "images": [
+                        {
+                            "alt": f"Poster oficial {title}",
+                            "image": upload_resp.blob,
+                        }
+                    ],
+                },
+                langs=["ro"],
+            )
+        else:
+            client.send_post(text=tb, langs=["ro"])
+        print(f"Postat cu poster: {title} ({main_provider})")
+
+
+def main():
+    posted_ids, history = load_state()
+    movie, providers = fetch_candidate_movie(posted_ids, history)
+
+    if not movie:
+        print("Nicio premieră astăzi pe platformele selectate.")
+        return
+
+    post_to_bsky(movie, providers)
+    
+    # Salvăm filmul și platforma pentru a asigura rotația la următoarele rulări
+    today_str = datetime.utcnow().strftime("%Y-%m-%d")
+    history.append({
+        "id": movie["id"],
+        "provider": providers[0],
+        "date": today_str
+    })
+    save_state(history)
+
+
+if __name__ == "__main__":
+    main()
