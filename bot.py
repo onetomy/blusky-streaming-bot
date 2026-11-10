@@ -1,7 +1,7 @@
 import json
 import os
 import re
-from datetime import datetime, timedelta
+from datetime import datetime
 import requests
 from atproto import Client, client_utils
 
@@ -19,6 +19,7 @@ ALLOWED_PROVIDERS = {
     "Amazon Prime Video",
     "Disney Plus",
     "Apple TV Plus",
+    "Apple TV+",
 }
 
 GENRES_MAP = {
@@ -68,19 +69,27 @@ COUNTRIES_MAP = {
 }
 
 
-def load_posted_ids():
+def load_state():
     if os.path.exists(STATE_FILE):
         with open(STATE_FILE, "r", encoding="utf-8") as f:
             try:
-                return set(json.load(f))
+                data = json.load(f)
+                if isinstance(data, list):
+                    # Compatibilitate cu versiunea anterioară unde se salvau doar ID-uri
+                    posted_ids = {
+                        item["id"] if isinstance(item, dict) else item
+                        for item in data
+                    }
+                    history = [item for item in data if isinstance(item, dict)]
+                    return posted_ids, history
             except json.JSONDecodeError:
-                return set()
-    return set()
+                return set(), []
+    return set(), []
 
 
-def save_posted_ids(posted_ids):
+def save_state(history):
     with open(STATE_FILE, "w", encoding="utf-8") as f:
-        json.dump(list(posted_ids)[-200:], f, indent=2)
+        json.dump(history[-200:], f, indent=2)
 
 
 def get_streaming_providers(movie_id):
@@ -90,6 +99,7 @@ def get_streaming_providers(movie_id):
 
     ro_providers = res.get("results", {}).get("RO", {})
     flatrate = ro_providers.get("flatrate", [])
+    
     matched = [
         p["provider_name"]
         for p in flatrate
@@ -120,31 +130,52 @@ def get_movie_extras(movie_id):
     return cast, trailer_url
 
 
-def fetch_candidate_movie(posted_ids):
-    today = datetime.utcnow().date()
-    start_date = today - timedelta(days=60)
+def fetch_candidate_movie(posted_ids, history):
+    # Luăm data de azi (fusul orar UTC folosit de acțiuni / TMDB)
+    today_str = datetime.utcnow().strftime("%Y-%m-%d")
 
     url = "https://api.themoviedb.org/3/discover/movie"
     params = {
         "api_key": TMDB_API_KEY,
         "watch_region": "RO",
         "with_watch_monetization_types": "flatrate",
-        "primary_release_date.gte": start_date.strftime("%Y-%m-%d"),
-        "primary_release_date.lte": today.strftime("%Y-%m-%d"),
-        "sort_by": "primary_release_date.desc",
+        "primary_release_date.gte": today_str,
+        "primary_release_date.lte": today_str,
+        "sort_by": "popularity.desc",
         "language": "ro-RO",
     }
 
     res = requests.get(url, params=params).json()
     results = res.get("results", [])
 
+    # Colectăm toate filmele eligibile din ziua de azi
+    today_candidates = []
     for movie in results:
         m_id = movie["id"]
         if m_id not in posted_ids:
             providers = get_streaming_providers(m_id)
             if providers:
-                return movie, providers
-    return None, None
+                today_candidates.append((movie, providers))
+
+    # Dacă nu există nicio premieră nouă azi pe platformele selectate
+    if not today_candidates:
+        return None, None
+
+    # Determinăm ce platforme au fost postate cel mai recent azi
+    last_providers = [
+        h.get("provider")
+        for h in reversed(history)
+        if h.get("date") == today_str
+    ]
+
+    # Prioritizăm o platformă care nu a fost postată la rularea anterioară
+    for movie, providers in today_candidates:
+        main_p = providers[0]
+        if not last_providers or main_p != last_providers[0]:
+            return movie, providers
+
+    # Dacă au rămas filme doar de la aceeași platformă, postăm ce e disponibil
+    return today_candidates[0][0], today_candidates[0][1]
 
 
 def download_poster(poster_path):
@@ -186,11 +217,10 @@ def post_to_bsky(movie, providers):
     provider_tag = clean_hashtag(main_provider)
     hashtags = f"#FilmeNoi #StreamingRomania #Cinema {provider_tag}"
 
-    header = f"{main_provider} : Premieră Streaming România\n\n"
+    header = f"{main_provider} : Premieră Azi pe Streaming\n\n"
     movie_info = f"{title}{year}\n{genre_country_line}\n"
     cast_line = f"Cu: {cast_str}\n\n" if cast_str else "\n"
 
-    # Calcul rezervă pentru limita de 300 de caractere
     fixed_len = (
         len(header)
         + len(movie_info)
@@ -226,59 +256,3 @@ def post_to_bsky(movie, providers):
     tb.text(f"\n{hashtags}")
 
     client = Client()
-    client.login(BSKY_HANDLE, BSKY_APP_PASSWORD)
-
-    # 1. Dacă filmul ARE trailer YouTube -> generăm player video direct în Bluesky
-    if trailer_url:
-        client.send_post(
-            text=tb,
-            embed={
-                "$type": "app.bsky.embed.external",
-                "external": {
-                    "uri": trailer_url,
-                    "title": f"{title} - Trailer Oficial",
-                    "description": f"Trailer oficial pentru {title}",
-                },
-            },
-            langs=["ro"],
-        )
-        print(f"Postat cu player video YouTube integrat: {title}")
-
-    # 2. Fallback: Dacă filmul NU are trailer -> punem posterul clasic
-    else:
-        poster_bytes = download_poster(movie.get("poster_path"))
-        if poster_bytes:
-            upload_resp = client.upload_blob(poster_bytes)
-            client.send_post(
-                text=tb,
-                embed={
-                    "$type": "app.bsky.embed.images",
-                    "images": [
-                        {
-                            "alt": f"Poster oficial {title}",
-                            "image": upload_resp.blob,
-                        }
-                    ],
-                },
-                langs=["ro"],
-            )
-        else:
-            client.send_post(text=tb, langs=["ro"])
-        print(f"Postat cu poster clasic (fără trailer disponibil): {title}")
-
-
-def main():
-    posted_ids = load_posted_ids()
-    movie, providers = fetch_candidate_movie(posted_ids)
-
-    if not movie:
-        print("Nu au fost găsite noutăți pe platformele selectate.")
-        return
-
-    post_to_bsky(movie, providers)
-    posted_ids.add(movie["id"])
-    save_posted_ids(posted_ids)
-
-
-if __name__ == "__main__":
-    main()
