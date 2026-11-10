@@ -2,15 +2,15 @@ name: Bluesky Romania Streaming Bot
 
 on:
   schedule:
-    # Dimineața (aprox. 07:15, 08:30, 09:45 ora României)
-    - cron: '15 5 * * *'
-    - cron: '30 6 * * *'
-    - cron: '45 7 * * *'
-    # Prânz (aprox. 14:15 ora României)
-    - cron: '15 12 * * *'
-    # Seara (aprox. 19:05, 20:05 ora României)
-    - cron: '5 17 * * *'
-    - cron: '5 18 * * *'
+    # Dimineața (aprox. 07:18, 08:33, 09:47 ora României)
+    - cron: '18 5 * * *'
+    - cron: '33 6 * * *'
+    - cron: '47 7 * * *'
+    # Prânz (aprox. 14:22 ora României)
+    - cron: '22 12 * * *'
+    # Seara (aprox. 19:08, 20:12 ora României)
+    - cron: '8 17 * * *'
+    - cron: '12 18 * * *'
 
   workflow_dispatch:
 
