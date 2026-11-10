@@ -75,24 +75,18 @@ def get_streaming_providers(movie_id):
 
 
 def get_movie_extras(movie_id):
-    """Extrage trailerul YouTube și primii 3 actori."""
     headers_params = {"api_key": TMDB_API_KEY}
 
-    # 1. Cast
     cast_url = f"https://api.themoviedb.org/3/movie/{movie_id}/credits"
     cast_res = requests.get(cast_url, params=headers_params).json()
     cast = [actor["name"] for actor in cast_res.get("cast", [])[:3]]
 
-    # 2. Trailer Video (YouTube)
     videos_url = f"https://api.themoviedb.org/3/movie/{movie_id}/videos"
     videos_res = requests.get(videos_url, params=headers_params).json()
     trailer_url = None
 
     for v in videos_res.get("results", []):
-        if v.get("site") == "YouTube" and v.get("type") in [
-            "Trailer",
-            "Teaser",
-        ]:
+        if v.get("site") == "YouTube" and v.get("type") in ["Trailer", "Teaser"]:
             trailer_url = f"https://www.youtube.com/watch?v={v.get('key')}"
             break
 
@@ -137,55 +131,45 @@ def download_poster(poster_path):
 
 
 def clean_hashtag(text):
-    """Transformă 'HBO Max' -> '#HBOMax' sau 'Amazon Prime Video' -> '#AmazonPrimeVideo'"""
     return "#" + re.sub(r"[^a-zA-Z0-9]", "", text)
 
 
 def post_to_bsky(movie, providers):
     title = movie.get("title") or movie.get("original_title")
-
-    # Platformă principală
     main_provider = providers[0]
 
-    # Anul
     release_date = movie.get("release_date", "")
     year = f" ({release_date[:4]})" if release_date else ""
 
-    # Țara de origine
     origin_countries = movie.get("origin_country", [])
     country_str = origin_countries[0] if origin_countries else "US"
 
-    # Genuri (primele 2)
     genre_ids = movie.get("genre_ids", [])
     genres = [GENRES_MAP.get(gid) for gid in genre_ids if gid in GENRES_MAP]
     genres_str = ", ".join(genres[:2]) if genres else "Film"
 
-    # Actori și Trailer
     cast, trailer_url = get_movie_extras(movie["id"])
     cast_str = ", ".join(cast) if cast else ""
 
     tmdb_url = f"https://www.themoviedb.org/movie/{movie['id']}"
 
-    # Construire hashtag-uri dinamice
     provider_tag = clean_hashtag(main_provider)
     hashtags = f"#FilmeNoi #StreamingRomania #Cinema {provider_tag}"
 
-    # Construim părțile fixe
     header = f"{main_provider} : Premieră Streaming România\n\n"
     movie_info = f"{title}{year}\n{country_str}  {genres_str}\n"
     cast_line = f"Cu: {cast_str}\n\n" if cast_str else "\n"
 
-    # Calculăm spațiul disponibil pentru sinopsis (Bluesky are limita de 300)
-    # Lăsăm ~50 caractere rezervă pentru link-uri și tag-uri
+    # Calcul pentru plafonul de 300 de caractere
     fixed_len = (
         len(header)
         + len(movie_info)
         + len(cast_line)
-        + len("Trailer Video  ")
+        + (len("Trailer Video • ") if trailer_url else 0)
         + len("Detalii\n")
         + len(hashtags)
     )
-    available_overview_len = max(0, 300 - fixed_len - 15)
+    available_overview_len = max(0, 300 - fixed_len - 10)
 
     raw_overview = (movie.get("overview") or "").strip().replace("\n", " ")
     if len(raw_overview) > available_overview_len and available_overview_len > 20:
@@ -195,7 +179,6 @@ def post_to_bsky(movie, providers):
     else:
         overview = ""
 
-    # Asamblare TextBuilder cu ancore reale pentru link-uri
     tb = client_utils.TextBuilder()
     tb.text(header)
     tb.text(movie_info)
@@ -208,4 +191,52 @@ def post_to_bsky(movie, providers):
         tb.link("Trailer Video", trailer_url)
         tb.text(" • ")
 
-    tb.link("Detal
+    tb.link("Detalii", tmdb_url)
+    tb.text(f"\n{hashtags}")
+
+    client = Client()
+    client.login(BSKY_HANDLE, BSKY_APP_PASSWORD)
+
+    poster_bytes = download_poster(movie.get("poster_path"))
+
+    if poster_bytes:
+        # Metoda robustă prin atproto: încărcăm blob-ul și trimitem postarea cu langs=['ro']
+        upload_resp = client.upload_blob(poster_bytes)
+        images = [
+            {
+                "alt": f"Poster oficial {title}",
+                "image": upload_resp.blob,
+            }
+        ]
+        client.send_post(
+            text=tb,
+            embed={
+                "$type": "app.bsky.embed.images",
+                "images": images,
+            },
+            langs=["ro"],
+        )
+    else:
+        client.send_post(
+            text=tb,
+            langs=["ro"],
+        )
+
+    print(f"Postat cu succes: {title} ({main_provider}) cu langs=['ro']")
+
+
+def main():
+    posted_ids = load_posted_ids()
+    movie, providers = fetch_candidate_movie(posted_ids)
+
+    if not movie:
+        print("Nu au fost găsite noutăți pe platformele selectate.")
+        return
+
+    post_to_bsky(movie, providers)
+    posted_ids.add(movie["id"])
+    save_posted_ids(posted_ids)
+
+
+if __name__ == "__main__":
+    main()
