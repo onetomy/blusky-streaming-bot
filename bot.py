@@ -190,27 +190,26 @@ def post_to_bsky(movie, providers):
     movie_info = f"{title}{year}\n{genre_country_line}\n"
     cast_line = f"Cu: {cast_str}\n\n" if cast_str else "\n"
 
-    # Calcul pentru plafonul strict de 300 de caractere Bluesky
+    # Calcul rezervă pentru limita de 300 de caractere
     fixed_len = (
         len(header)
         + len(movie_info)
         + len(cast_line)
-        + (len("Trailer Video  ") if trailer_url else 0)
         + len("Detalii\n")
         + len(hashtags)
     )
-    available_overview_len = max(0, 300 - fixed_len - 12)
+    available_overview_len = max(0, 300 - fixed_len - 10)
 
     raw_overview = (movie.get("overview") or "").strip().replace("\n", " ")
     if (
         len(raw_overview) > available_overview_len
-        and available_overview_len > 25
+        and available_overview_len > 20
     ):
         overview = (
             raw_overview[: available_overview_len - 3].rsplit(" ", 1)[0]
             + "...\n"
         )
-    elif available_overview_len > 25 and raw_overview:
+    elif available_overview_len > 20 and raw_overview:
         overview = raw_overview + "\n"
     else:
         overview = ""
@@ -223,40 +222,49 @@ def post_to_bsky(movie, providers):
     if cast_str:
         tb.text(cast_line)
 
-    if trailer_url:
-        tb.link("Trailer Video", trailer_url)
-        tb.text("  ")
-
     tb.link("Detalii", tmdb_url)
     tb.text(f"\n{hashtags}")
 
     client = Client()
     client.login(BSKY_HANDLE, BSKY_APP_PASSWORD)
 
-    poster_bytes = download_poster(movie.get("poster_path"))
-
-    if poster_bytes:
-        upload_resp = client.upload_blob(poster_bytes)
+    # 1. Dacă filmul ARE trailer YouTube -> generăm player video direct în Bluesky
+    if trailer_url:
         client.send_post(
             text=tb,
             embed={
-                "$type": "app.bsky.embed.images",
-                "images": [
-                    {
-                        "alt": f"Poster oficial {title}",
-                        "image": upload_resp.blob,
-                    }
-                ],
+                "$type": "app.bsky.embed.external",
+                "external": {
+                    "uri": trailer_url,
+                    "title": f"{title} - Trailer Oficial",
+                    "description": f"Trailer oficial pentru {title}",
+                },
             },
             langs=["ro"],
         )
-    else:
-        client.send_post(
-            text=tb,
-            langs=["ro"],
-        )
+        print(f"Postat cu player video YouTube integrat: {title}")
 
-    print(f"Postat cu succes: {title} ({main_provider})")
+    # 2. Fallback: Dacă filmul NU are trailer -> punem posterul clasic
+    else:
+        poster_bytes = download_poster(movie.get("poster_path"))
+        if poster_bytes:
+            upload_resp = client.upload_blob(poster_bytes)
+            client.send_post(
+                text=tb,
+                embed={
+                    "$type": "app.bsky.embed.images",
+                    "images": [
+                        {
+                            "alt": f"Poster oficial {title}",
+                            "image": upload_resp.blob,
+                        }
+                    ],
+                },
+                langs=["ro"],
+            )
+        else:
+            client.send_post(text=tb, langs=["ro"])
+        print(f"Postat cu poster clasic (fără trailer disponibil): {title}")
 
 
 def main():
