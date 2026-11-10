@@ -43,6 +43,30 @@ GENRES_MAP = {
     37: "Western",
 }
 
+COUNTRIES_MAP = {
+    "US": "Statele Unite",
+    "RO": "România",
+    "GB": "Marea Britanie",
+    "FR": "Franța",
+    "DE": "Germania",
+    "ES": "Spania",
+    "IT": "Italia",
+    "CA": "Canada",
+    "JP": "Japonia",
+    "KR": "Coreea de Sud",
+    "AU": "Australia",
+    "SE": "Suedia",
+    "NO": "Norvegia",
+    "DK": "Danemarca",
+    "PL": "Polonia",
+    "BE": "Belgia",
+    "TR": "Turcia",
+    "MX": "Mexic",
+    "BR": "Brazilia",
+    "IN": "India",
+    "CN": "China",
+}
+
 
 def load_posted_ids():
     if os.path.exists(STATE_FILE):
@@ -75,6 +99,7 @@ def get_streaming_providers(movie_id):
 
 
 def get_movie_extras(movie_id):
+    """Extrage trailerul YouTube și primii 3 actori."""
     headers_params = {"api_key": TMDB_API_KEY}
 
     cast_url = f"https://api.themoviedb.org/3/movie/{movie_id}/credits"
@@ -84,13 +109,18 @@ def get_movie_extras(movie_id):
     videos_url = f"https://api.themoviedb.org/3/movie/{movie_id}/videos"
     videos_res = requests.get(videos_url, params=headers_params).json()
     trailer_url = None
+    trailer_title = "Trailer Oficial"
 
     for v in videos_res.get("results", []):
-        if v.get("site") == "YouTube" and v.get("type") in ["Trailer", "Teaser"]:
+        if v.get("site") == "YouTube" and v.get("type") in [
+            "Trailer",
+            "Teaser",
+        ]:
             trailer_url = f"https://www.youtube.com/watch?v={v.get('key')}"
+            trailer_title = v.get("name", "Trailer Oficial")
             break
 
-    return cast, trailer_url
+    return cast, trailer_url, trailer_title
 
 
 def fetch_candidate_movie(posted_ids):
@@ -138,17 +168,25 @@ def post_to_bsky(movie, providers):
     title = movie.get("title") or movie.get("original_title")
     main_provider = providers[0]
 
+    # Anul
     release_date = movie.get("release_date", "")
     year = f" ({release_date[:4]})" if release_date else ""
 
+    # Numele întreg al țării
     origin_countries = movie.get("origin_country", [])
-    country_str = origin_countries[0] if origin_countries else "US"
+    raw_country = origin_countries[0] if origin_countries else "US"
+    country_name = COUNTRIES_MAP.get(raw_country, raw_country)
 
+    # Genurile
     genre_ids = movie.get("genre_ids", [])
     genres = [GENRES_MAP.get(gid) for gid in genre_ids if gid in GENRES_MAP]
     genres_str = ", ".join(genres[:2]) if genres else "Film"
 
-    cast, trailer_url = get_movie_extras(movie["id"])
+    # Format cerut: "Thriller, Mister , Statele Unite"
+    genre_country_line = f"{genres_str} , {country_name}"
+
+    # Actori și Trailer
+    cast, trailer_url, trailer_title = get_movie_extras(movie["id"])
     cast_str = ", ".join(cast) if cast else ""
 
     tmdb_url = f"https://www.themoviedb.org/movie/{movie['id']}"
@@ -157,28 +195,34 @@ def post_to_bsky(movie, providers):
     hashtags = f"#FilmeNoi #StreamingRomania #Cinema {provider_tag}"
 
     header = f"{main_provider} : Premieră Streaming România\n\n"
-    movie_info = f"{title}{year}\n{country_str}  {genres_str}\n"
+    movie_info = f"{title}{year}\n{genre_country_line}\n"
     cast_line = f"Cu: {cast_str}\n\n" if cast_str else "\n"
 
-    # Calcul pentru plafonul de 300 de caractere
+    # Calcul rezervă pentru plafonul de 300 de caractere
     fixed_len = (
         len(header)
         + len(movie_info)
         + len(cast_line)
-        + (len("Trailer Video • ") if trailer_url else 0)
         + len("Detalii\n")
         + len(hashtags)
     )
     available_overview_len = max(0, 300 - fixed_len - 10)
 
     raw_overview = (movie.get("overview") or "").strip().replace("\n", " ")
-    if len(raw_overview) > available_overview_len and available_overview_len > 20:
-        overview = raw_overview[: available_overview_len - 3].rsplit(" ", 1)[0] + "...\n"
+    if (
+        len(raw_overview) > available_overview_len
+        and available_overview_len > 20
+    ):
+        overview = (
+            raw_overview[: available_overview_len - 3].rsplit(" ", 1)[0]
+            + "...\n"
+        )
     elif available_overview_len > 20 and raw_overview:
         overview = raw_overview + "\n"
     else:
         overview = ""
 
+    # Construire conținut text
     tb = client_utils.TextBuilder()
     tb.text(header)
     tb.text(movie_info)
@@ -187,56 +231,47 @@ def post_to_bsky(movie, providers):
     if cast_str:
         tb.text(cast_line)
 
-    if trailer_url:
-        tb.link("Trailer Video", trailer_url)
-        tb.text(" • ")
-
     tb.link("Detalii", tmdb_url)
     tb.text(f"\n{hashtags}")
 
     client = Client()
     client.login(BSKY_HANDLE, BSKY_APP_PASSWORD)
 
-    poster_bytes = download_poster(movie.get("poster_path"))
+    # Dacă există trailer YouTube -> Creăm card/player video integrat în Bluesky
+    if trailer_url:
+        poster_bytes = download_poster(movie.get("poster_path"))
+        thumb_blob = None
+        if poster_bytes:
+            thumb_upload = client.upload_blob(poster_bytes)
+            thumb_blob = thumb_upload.blob
 
-    if poster_bytes:
-        # Metoda robustă prin atproto: încărcăm blob-ul și trimitem postarea cu langs=['ro']
-        upload_resp = client.upload_blob(poster_bytes)
-        images = [
-            {
-                "alt": f"Poster oficial {title}",
-                "image": upload_resp.blob,
-            }
-        ]
         client.send_post(
             text=tb,
             embed={
-                "$type": "app.bsky.embed.images",
-                "images": images,
+                "$type": "app.bsky.embed.external",
+                "external": {
+                    "uri": trailer_url,
+                    "title": f"Trailer: {title}",
+                    "description": f"Vizionează trailerul oficial pentru {title}",
+                    **(
+                        {"thumb": thumb_blob.to_dict()}
+                        if thumb_blob
+                        else {}
+                    ),
+                },
             },
             langs=["ro"],
         )
+        print(f"Postat cu player video: {title}")
+
+    # Fallback: Dacă nu există trailer -> Atașăm posterul mare ca imagine
     else:
-        client.send_post(
-            text=tb,
-            langs=["ro"],
-        )
-
-    print(f"Postat cu succes: {title} ({main_provider}) cu langs=['ro']")
-
-
-def main():
-    posted_ids = load_posted_ids()
-    movie, providers = fetch_candidate_movie(posted_ids)
-
-    if not movie:
-        print("Nu au fost găsite noutăți pe platformele selectate.")
-        return
-
-    post_to_bsky(movie, providers)
-    posted_ids.add(movie["id"])
-    save_posted_ids(posted_ids)
-
-
-if __name__ == "__main__":
-    main()
+        poster_bytes = download_poster(movie.get("poster_path"))
+        if poster_bytes:
+            upload_resp = client.upload_blob(poster_bytes)
+            images = [
+                {
+                    "alt": f"Poster oficial {title}",
+                    "image": upload_resp.blob,
+                }
+            ]
