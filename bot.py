@@ -63,6 +63,17 @@ def fetch_candidate_movie(posted_ids):
     return None, None
 
 
+def download_poster(poster_path):
+    """Descarcă imaginea de poster de pe TMDB în format binar."""
+    if not poster_path:
+        return None
+    url = f"https://image.tmdb.org/t/p/w500{poster_path}"
+    resp = requests.get(url)
+    if resp.status_code == 200:
+        return resp.content
+    return None
+
+
 def post_to_bsky(movie, providers):
     title = movie.get("title") or movie.get("original_title")
     overview = movie.get("overview", "")
@@ -73,20 +84,32 @@ def post_to_bsky(movie, providers):
     tmdb_url = f"https://www.themoviedb.org/movie/{movie['id']}"
 
     tb = client_utils.TextBuilder()
-    tb.text(f"🎬 Nou pe streaming în România:\n\n")
+    tb.text("🎬 Nou pe streaming în România:\n\n")
     tb.text(f"📌 {title}\n")
-    tb.text(f"📺 Disponibil pe: {providers_str}\n")
+    tb.text(f"📺 Disponibil pe: {providers_str}\n\n")
     if overview:
         tb.text(f"📝 {overview}\n\n")
-    else:
-        tb.text("\n")
-    tb.link("Detalii TMDB", tmdb_url)
-    tb.text("\n#filme #streaming #romania #cinema")
+    tb.link("🔗 Detalii TMDB", tmdb_url)
+    tb.text("\n\n#filme #streaming #romania #cinema")
 
     client = Client()
     client.login(BSKY_HANDLE, BSKY_APP_PASSWORD)
-    client.send_post(tb)
-    print(f"Postat cu succes: {title}")
+
+    # Verifică dacă filmul are poster și îl descarcă
+    poster_bytes = download_poster(movie.get("poster_path"))
+
+    if poster_bytes:
+        # Postează textul însoțit de poster și descriere alt-text
+        client.send_image(
+            text=tb,
+            image=poster_bytes,
+            image_alt=f"Poster oficial pentru filmul {title}",
+        )
+    else:
+        # Fallback dacă filmul nu are poster disponibil
+        client.send_post(tb)
+
+    print(f"Postat cu succes cu poster: {title}")
 
 
 def main():
