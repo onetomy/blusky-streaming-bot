@@ -2,8 +2,17 @@ name: Bluesky Romania Streaming Bot
 
 on:
   schedule:
-    - cron: '0 */4 * * *'
-  workflow_dispatch:
+    # Dimineața (aprox. 07:15, 08:30, 09:45 ora României)
+    - cron: '15 5 * * *'
+    - cron: '30 6 * * *'
+    - cron: '45 7 * * *'
+    # Prânz (aprox. 14:15 ora României)
+    - cron: '15 12 * * *'
+    # Seara (aprox. 19:05, 20:05 ora României)
+    - cron: '5 17 * * *'
+    - cron: '5 18 * * *'
+
+  workflow_dispatch: # Permite în continuare rularea manuală la cerere
 
 jobs:
   run-bot:
@@ -13,10 +22,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
 
       - name: Setup Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
