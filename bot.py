@@ -11,7 +11,6 @@ BSKY_APP_PASSWORD = os.environ.get("BSKY_APP_PASSWORD")
 
 STATE_FILE = "posted_movies.json"
 
-# ID-urile oficiale JustWatch / TMDB pentru platformele din România
 PROVIDER_IDS = {
     8: "Netflix",
     1899: "Max",
@@ -117,7 +116,6 @@ def get_streaming_providers(movie_id):
         if p.get("provider_name") in ALLOWED_PROVIDERS
     ]
 
-    # Prioritizăm denumirea Apple TV în lista returnată
     matched.sort(key=lambda p: 0 if p in APPLE_VARIANTS else 1)
     return matched
 
@@ -146,7 +144,7 @@ def get_movie_extras(movie_id):
 
 def fetch_candidate_movie(posted_ids, history):
     today = datetime.utcnow().date()
-    # Fereastră de 10 zile pentru a prinde premierele recente ale săptămânii
+    # Fereastră de 10 zile pentru premiere recente
     start_date = today - timedelta(days=10)
 
     provider_ids_str = "|".join(str(pid) for pid in PROVIDER_IDS.keys())
@@ -159,7 +157,7 @@ def fetch_candidate_movie(posted_ids, history):
         "with_watch_monetization_types": "flatrate",
         "primary_release_date.gte": start_date.strftime("%Y-%m-%d"),
         "primary_release_date.lte": today.strftime("%Y-%m-%d"),
-        "sort_by": "primary_release_date.desc",  # Pune cele mai noi pe primele locuri
+        "sort_by": "primary_release_date.desc",
         "language": "ro-RO",
     }
 
@@ -172,7 +170,6 @@ def fetch_candidate_movie(posted_ids, history):
         if m_id not in posted_ids:
             providers = get_streaming_providers(m_id)
             if providers:
-                # Dacă este titlu pe Apple TV, îl prioritizează imediat
                 if any(p in APPLE_VARIANTS for p in providers):
                     return movie, providers
                 candidates.append((movie, providers))
@@ -180,7 +177,6 @@ def fetch_candidate_movie(posted_ids, history):
     if not candidates:
         return None, None
 
-    # Alternare între servicii: verifică platforma postată anterior
     last_provider = history[-1].get("provider") if history else None
 
     for movie, providers in candidates:
@@ -195,9 +191,28 @@ def download_poster(poster_path):
     if not poster_path:
         return None
     url = f"https://image.tmdb.org/t/p/w500{poster_path}"
-    resp = requests.get(url, timeout=15)
-    if resp.status_code == 200:
-        return resp.content
+    try:
+        resp = requests.get(url, timeout=15)
+        if resp.status_code == 200:
+            return resp.content
+    except Exception:
+        pass
+    return None
+
+
+def download_youtube_thumb(youtube_url):
+    """Extrage ID-ul video-ului de YouTube și descarcă miniatura color."""
+    match = re.search(r"v=([a-zA-Z0-9_-]+)", youtube_url)
+    if not match:
+        return None
+    video_id = match.group(1)
+    thumb_url = f"https://img.youtube.com/vi/{video_id}/hqdefault.jpg"
+    try:
+        resp = requests.get(thumb_url, timeout=10)
+        if resp.status_code == 200:
+            return resp.content
+    except Exception:
+        pass
     return None
 
 
@@ -234,7 +249,6 @@ def post_to_bsky(movie, providers):
     movie_info = f"{title}{year}\n{genre_country_line}\n"
     cast_line = f"Cu: {cast_str}\n\n" if cast_str else "\n"
 
-    # Calcul pentru plafonul de 300 de caractere din Bluesky
     fixed_len = (
         len(header)
         + len(movie_info)
@@ -273,19 +287,28 @@ def post_to_bsky(movie, providers):
     client.login(BSKY_HANDLE, BSKY_APP_PASSWORD)
 
     if trailer_url:
+        # Obținem imaginea YouTube sau posterul ca imagine de fundal pe cardul video
+        thumb_bytes = download_youtube_thumb(trailer_url) or download_poster(movie.get("poster_path"))
+        
+        external_data = {
+            "uri": trailer_url,
+            "title": f"{title} - Trailer Oficial",
+            "description": f"Trailer oficial pentru {title}",
+        }
+
+        if thumb_bytes:
+            thumb_upload = client.upload_blob(thumb_bytes)
+            external_data["thumb"] = thumb_upload.blob
+
         client.send_post(
             text=tb,
             embed={
                 "$type": "app.bsky.embed.external",
-                "external": {
-                    "uri": trailer_url,
-                    "title": f"{title} - Trailer Oficial",
-                    "description": f"Trailer oficial pentru {title}",
-                },
+                "external": external_data,
             },
             langs=["ro"],
         )
-        print(f"Postat cu player video YouTube integrat: {title} ({main_provider})")
+        print(f"Postat cu player video și imagine: {title} ({main_provider})")
     else:
         poster_bytes = download_poster(movie.get("poster_path"))
         if poster_bytes:
